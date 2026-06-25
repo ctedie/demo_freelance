@@ -1,27 +1,77 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "inc/hw_memmap.h"
+#include "inc/hw_ints.h"
 #include "driverlib/sysctl.h"
 #include "driverlib/gpio.h"
 #include "driverlib/uart.h"
 #include "driverlib/pin_map.h"
-#include "driverlib/pwm.h"
+#include "driverlib/timer.h"
+#include "driverlib/interrupt.h"
 
-// Définition de la période pour une fréquence PWM de 10 kHz
-// Horloge PWM = Horloge système (120 MHz) / 1 = 120 000 000 Hz
-// Période = 120 000 000 / 10 000 = 12 000 cycles
-#define PWM_PERIOD 12000
+#define BUFFER_SIZE 32
+
+// ==========================================
+// PROTOTYPES DES FONCTIONS
+// ==========================================
+void ConfigureSystem(void);
+void ConfigureUART(void);
+void ConfigureSoftwarePWM(void);
+void SetRGBIntensity(uint8_t r, uint8_t g, uint8_t b);
+void ProcessCommand(char* cmd);
+void UART0IntHandler(void);
+void Timer0AIntHandler(void);
+
+// ==========================================
+// VARIABLES GLOBALES
+// ==========================================
+char rxBuffer[BUFFER_SIZE];
+volatile uint16_t rxIndex = 0;
+volatile bool commandReceived = false;
+
+// Variables pour le PWM Logiciel (plage 0 à 255)
+volatile uint8_t pwmCounter = 0;
+volatile uint8_t intensityR = 0;
+volatile uint8_t intensityG = 0;
+volatile uint8_t intensityB = 0;
+
+// ==========================================
+// FONCTION PRINCIPALE
+// ==========================================
+int main(void) {
+    ConfigureSystem();
+    ConfigureSoftwarePWM();
+    ConfigureUART(); // Initialisé en dernier
+
+    // Petit test visuel : lueur blanche au démarrage
+    SetRGBIntensity(10, 10, 10);
+
+    while (1) {
+        if (commandReceived) {
+            ProcessCommand(rxBuffer);
+            
+            rxIndex = 0;
+            commandReceived = false;
+        }
+    }
+}
+
+// ==========================================
+// IMPLÉMENTATION DES FONCTIONS
+// ==========================================
 
 void ConfigureSystem(void) {
-    // Configuration de l'horloge système à 120 MHz
+    // Horloge système à 120 MHz
     SysCtlClockFreqSet((SYSCTL_XTAL_25MHZ | SYSCTL_OSC_MAIN | SYSCTL_USE_PLL | SYSCTL_CFG_VCO_480), 120000000);
 
-    // Activation des périphériques indispensables
+    // Activation des périphériques
     SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA); // Pour l'UART0 (PA0, PA1)
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF); // Pour RED (PF2) et GREEN (PF3)
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOG); // Pour BLUE (PG0)
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_PWM0);  // Module PWM0 matériel
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA); // UART0 pins
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOF); // RED (PF2), GREEN (PF3)
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOG); // BLUE (PG0)
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0); // Timer pour le PWM logiciel
 }
 
 void ConfigureUART(void) {
@@ -31,62 +81,108 @@ void ConfigureUART(void) {
 
     UARTConfigSetExpClk(UART0_BASE, 120000000, 115200,
                         (UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE | UART_CONFIG_PAR_NONE));
+
+    IntRegister(INT_UART0, UART0IntHandler);
+    IntEnable(INT_UART0);
+    UARTIntEnable(UART0_BASE, UART_INT_RX | UART_INT_RT);
 }
 
-void ConfigureHardwarePWM(void) {
-    // 1. Configurer les fonctions alternatives PWM sur les pins validées
-    GPIOPinConfigure(GPIO_PF2_M0PWM2); // ROUGE
-    GPIOPinConfigure(GPIO_PF3_M0PWM3); // VERT
-    GPIOPinConfigure(GPIO_PG0_M0PWM4); // BLEU (Corrigé en M0PWM4)
+void ConfigureSoftwarePWM(void) {
+    // 1. Configurer les pins des LED en sorties GPIO normales
+    GPIOPinTypeGPIOOutput(GPIO_PORTF_BASE, GPIO_PIN_2 | GPIO_PIN_3);
+    GPIOPinTypeGPIOOutput(GPIO_PORTG_BASE, GPIO_PIN_0);
 
-    GPIOPinTypePWM(GPIO_PORTF_BASE, GPIO_PIN_2 | GPIO_PIN_3);
-    GPIOPinTypePWM(GPIO_PORTG_BASE, GPIO_PIN_0);
+    // Éteindre les pins au départ
+    GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_2 | GPIO_PIN_3, 0);
+    GPIOPinWrite(GPIO_PORTG_BASE, GPIO_PIN_0, 0);
 
-    // 2. Horloge du module PWM (120 MHz direct, pas de diviseur)
-    PWMClockSet(PWM0_BASE, PWM_SYSCLK_DIV_1);
+    // 2. Configurer le Timer0A pour générer des interruptions périodiques
+    // Fréquence voulue : 256 étapes * 100 Hz (fréquence PWM globale) = ~25600 Hz
+    // Période du Timer = 120 000 000 / 25600 = 4687 cycles
+    TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
+    TimerLoadSet(TIMER0_BASE, TIMER_A, 4687);
 
-    // 3. Configurer les Générateurs du Module 0
-    // PF2/PF3 utilisent le Générateur 1. PG0 utilise le Générateur 2 (lié à M0PWM4).
-    PWMGenConfigure(PWM0_BASE, PWM_GEN_1, PWM_GEN_MODE_DOWN | PWM_GEN_MODE_NO_SYNC);
-    PWMGenConfigure(PWM0_BASE, PWM_GEN_2, PWM_GEN_MODE_DOWN | PWM_GEN_MODE_NO_SYNC);
+    // 3. Enregistrer et activer l'interruption du Timer
+    TimerIntRegister(TIMER0_BASE, TIMER_A, Timer0AIntHandler);
+    TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+    IntEnable(INT_TIMER0A);
+    
+    // Activation globale des interruptions
+    IntMasterEnable();
 
-    // 4. Définir la période (Fréquence de 10 kHz)
-    PWMGenPeriodSet(PWM0_BASE, PWM_GEN_1, PWM_PERIOD);
-    PWMGenPeriodSet(PWM0_BASE, PWM_GEN_2, PWM_PERIOD);
-
-    // 5. Initialiser le rapport cyclique à 0% au démarrage (LED éteintes)
-    PWMPulseWidthSet(PWM0_BASE, PWM_OUT_2, 0); // Rouge (M0PWM2)
-    PWMPulseWidthSet(PWM0_BASE, PWM_OUT_3, 0); // Vert  (M0PWM3)
-    PWMPulseWidthSet(PWM0_BASE, PWM_OUT_4, 0); // Bleu  (M0PWM4 - Corrigé)
-
-    // 6. Activer les générateurs 1 et 2
-    PWMGenEnable(PWM0_BASE, PWM_GEN_1);
-    PWMGenEnable(PWM0_BASE, PWM_GEN_2);
-
-    // 7. Activer les sorties physiques PWM vers les pins
-    PWMOutputState(PWM0_BASE, PWM_OUT_2_BIT | PWM_OUT_3_BIT | PWM_OUT_4_BIT, true);
+    // Démarrer le Timer
+    TimerEnable(TIMER0_BASE, TIMER_A);
 }
 
-// Fonction pour appliquer l'intensité (0 à 255) sur chaque canal
 void SetRGBIntensity(uint8_t r, uint8_t g, uint8_t b) {
-    uint32_t widthR = (r * PWM_PERIOD) / 255;
-    uint32_t widthG = (g * PWM_PERIOD) / 255;
-    uint32_t widthB = (b * PWM_PERIOD) / 255;
-
-    PWMPulseWidthSet(PWM0_BASE, PWM_OUT_2, widthR);
-    PWMPulseWidthSet(PWM0_BASE, PWM_OUT_3, widthG);
-    PWMPulseWidthSet(PWM0_BASE, PWM_OUT_4, widthB); // Corrigé en PWM_OUT_4
+    // Mise à jour atomique des variables lues par l'interruption
+    intensityR = r;
+    intensityG = g;
+    intensityB = b;
 }
 
-int main(void) {
-    ConfigureSystem();
-    ConfigureUART();
-    ConfigureHardwarePWM();
+void ProcessCommand(char* cmd) {
+    int r = 0, g = 0, b = 0;
+    
+    // Décodage de la chaîne "R,G,B"
+    if (sscanf(cmd, "%d,%d,%d", &r, &g, &b) == 3) {
+        if (r < 0) r = 0; if (r > 255) r = 255;
+        if (g < 0) g = 0; if (g > 255) g = 255;
+        if (b < 0) b = 0; if (b > 255) b = 255;
 
-    // Petit test visuel : blanc faible intensité au démarrage
-    SetRGBIntensity(30, 30, 30);
+        SetRGBIntensity((uint8_t)r, (uint8_t)g, (uint8_t)b);
+    }
+}
 
-    while (1) {
-        // En attente de la trame UART
+// Routine du PWM Logiciel (Exécutée à ~25.6 kHz)
+void Timer0AIntHandler(void) {
+    TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+
+    // Gestion du Rouge (PF2)
+    if (pwmCounter < intensityR) {
+        GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_2, GPIO_PIN_2);
+    } else {
+        GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_2, 0);
+    }
+
+    // Gestion du Vert (PF3)
+    if (pwmCounter < intensityG) {
+        GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_3, GPIO_PIN_3);
+    } else {
+        GPIOPinWrite(GPIO_PORTF_BASE, GPIO_PIN_3, 0);
+    }
+
+    // Gestion du Bleu (PG0)
+    if (pwmCounter < intensityB) {
+        GPIOPinWrite(GPIO_PORTG_BASE, GPIO_PIN_0, GPIO_PIN_0);
+    } else {
+        GPIOPinWrite(GPIO_PORTG_BASE, GPIO_PIN_0, 0);
+    }
+
+    // Incrémentation du compteur de cycle (0 à 255 automatique car uint8_t)
+    pwmCounter++;
+}
+
+void UART0IntHandler(void) {
+    uint32_t ui32Status;
+
+    ui32Status = UARTIntStatus(UART0_BASE, true);
+    UARTIntClear(UART0_BASE, ui32Status);
+
+    while(UARTCharsAvail(UART0_BASE)) {
+        char c = UARTCharGetNonBlocking(UART0_BASE);
+
+        // Écho
+        UARTCharPutNonBlocking(UART0_BASE, c);
+
+        if (c == '\n' || c == '\r') {
+            if (rxIndex > 0) {
+                rxBuffer[rxIndex] = '\0';
+                commandReceived = true;
+            }
+        } 
+        else if (rxIndex < (BUFFER_SIZE - 1)) {
+            rxBuffer[rxIndex++] = c;
+        }
     }
 }
