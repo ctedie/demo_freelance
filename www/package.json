@@ -11,7 +11,9 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "bootstrap": "^5.3.8",
     "express": "^5.2.1",
+    "react-router-dom": "^7.18.0",
     "serialport": "^13.0.0"
   }
 }
