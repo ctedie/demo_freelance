@@ -8,6 +8,7 @@ import Micro from './pages/Micro';
 import Screen from './pages/Screen';
 import Accelero from './pages/Accelero';
 import Navbar from './components/Navbar';
+import LedControl from './pages/LedControl';
 
 function App() {
   return (
@@ -31,7 +32,9 @@ function App() {
               <Route path="/micro" element={<Micro />} />
               <Route path="/screen" element={<Screen />} />
               <Route path="/accelero" element={<Accelero />} />
+              <Route path="/led" element={<LedControl />} />
             </Routes>
+
           </div>
         </main>
 

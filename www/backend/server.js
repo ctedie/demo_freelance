@@ -32,6 +32,7 @@ port.open((err) => {
 
 // --- CONFIGURATION EXPRESS ---
 app.use(express.json()); // Permet de lire le format JSON dans les requêtes
+app.use(express.static(path.join(__dirname, 'public'))); // Sert les fichiers du dossier /public (si besoin)
 
 // --- ROUTES API ---
 // API pour recevoir les couleurs du front-end React et les envoyer à la Tiva C
