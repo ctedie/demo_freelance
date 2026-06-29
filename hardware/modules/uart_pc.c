@@ -1,112 +1,134 @@
 #include "uart_pc.h"
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdio.h>    
 #include <string.h>   
 #include "inc/hw_memmap.h"
 #include "inc/hw_ints.h"
-#include "driverlib/pin_map.h"
 #include "driverlib/sysctl.h"
 #include "driverlib/gpio.h"
 #include "driverlib/uart.h"
 #include "driverlib/interrupt.h"
-#include "led_rgb.h"
+#include "driverlib/pin_map.h"
 
-// Inclusion du module LED pour pouvoir appliquer les changements d'intensité
+// Inclusion des modules pour piloter les actionneurs
 #include "led_rgb.h" 
+#include "buzzer.h"
 
-// --- VARIABLES LOCALES DE STOCKAGE POUR LE BUFFER SÉRIE ---
+// --- CONFIGURATION DU BUFFER SÉRIE SÉCURISÉ ---
 #define UART_BUFFER_SIZE 32
+
+// Alignement sur 4 octets (32 bits) pour garantir un accès mémoire optimal par le CPU
+#pragma DATA_ALIGN(g_cRxBuffer, 4)
 static char g_cRxBuffer[UART_BUFFER_SIZE];
 static uint8_t g_ui8BufferIndex = 0;
 
 /**
- * @brief Initialisation du module UART0 pour la communication avec le PC
- * @note La fonction d'interruption UART0IntHandler doit être déclarée statiquement 
- * dans le fichier tm4c1294ncpdt_startup_ccs.c
+ * @brief Initialisation de l'UART0 pour la communication avec le PC (115200 bauds)
  */
 void UART_PC_Init(void) {
-    // 1. Activation des horloges pour l'UART0 et le Port A (PA0/PA1)
+    // 1. Activation des horloges pour l'UART0 et le Port A
     SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
 
-    // Attente de stabilisation des périphériques
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_UART0) || 
           !SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOA)) {}
 
-    // Petit délai de sécurité pour stabiliser le bus à 120 MHz
-    SysCtlDelay(10);
+    SysCtlDelay(10); // Petit délai de stabilisation mécanique du bus
 
-    // 2. Configuration des broches PA0 (RX) et PA1 (TX) en mode UART
+    // 2. Configuration des broches PA0 (RX) et PA1 (TX)
     GPIOPinConfigure(GPIO_PA0_U0RX);
     GPIOPinConfigure(GPIO_PA1_U0TX);
     GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
 
-    // 3. Configuration de la liaison (115200 bauds, 8 bits de données, 1 bit de stop, pas de parité)
-    // IMPORTANT : On utilise la fréquence exacte de 120 MHz configurée dans le main
+    // 3. Liaison série à 115200 bauds basée sur l'horloge système de 120 MHz
     UARTConfigSetExpClk(UART0_BASE, 120000000, 115200,
                         (UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE |
                          UART_CONFIG_PAR_NONE));
 
-    // 4. Configuration des interruptions UART
-    // On active les interruptions sur la réception (RX) et sur le timeout de réception (RT)
+    // 4. Configuration et activation des interruptions matérielles
     UARTIntEnable(UART0_BASE, UART_INT_RX | UART_INT_RT);
-    
-    // On active l'interruption au niveau du contrôleur d'interruptions (NVIC)
-    // NOTE : Pas de "IntRegister" ici ! La liaison est gérée par le fichier startup.
     IntEnable(INT_UART0);
 
-    // Réinitialisation du buffer de réception par sécurité
+    // Initialisation propre de la mémoire du tampon
     memset(g_cRxBuffer, 0, UART_BUFFER_SIZE);
     g_ui8BufferIndex = 0;
 }
 
 /**
- * @brief Envoie d'une chaîne de caractères via l'UART0 (Tiva C -> PC)
+ * @brief Envoi d'une chaîne de caractères textuelle vers le PC
  */
 void UART_PC_SendString(const char *str) {
     while(*str) {
-        // Envoi du caractère (bloquant si le buffer d'envoi matériel FIFO est plein)
         UARTCharPut(UART0_BASE, *str++);
     }
 }
 
 /**
- * @brief Routine d'interruption (ISR) de l'UART0
- * @note Cette fonction est publique (pas de static) pour être visible par le fichier de startup.
+ * @brief Routine d'interruption (ISR) de l'UART0 - Gestionnaire de paquets
  */
 void UART0IntHandler(void) {
     uint32_t ui32Status;
 
-    // Récupération et acquittement des drapeaux d'interruption
+    // Récupération et acquittement des drapeaux d'interruption UART
     ui32Status = UARTIntStatus(UART0_BASE, true);
     UARTIntClear(UART0_BASE, ui32Status);
 
-    // Lecture de tous les caractères disponibles dans la FIFO matérielle de réception
+    // Vidage de la FIFO matérielle de réception
     while(UARTCharsAvail(UART0_BASE)) {
         char c = (char)UARTCharGetNonBlocking(UART0_BASE);
 
-        // Détection de la fin de ligne (\n ou \r)
+        // Détection de fin de ligne (Validation de la trame reçue)
         if (c == '\n' || c == '\r') {
             if (g_ui8BufferIndex > 0) {
-                // On ferme proprement la chaîne de caractères (String C)
-                g_cRxBuffer[g_ui8BufferIndex] = '\0';
+                g_cRxBuffer[g_ui8BufferIndex] = '\0'; // Fermeture de la string C
 
-                // Variables de stockage temporaires pour l'extraction
-                int r = 0, g = 0, b = 0;
+                // ============================================================
+                // SCÉNARIO 1 : COMMANDE DU BUZZER PIANO - Format "B:Frequence"
+                // ============================================================
+                if (g_cRxBuffer[0] == 'B' && g_cRxBuffer[1] == ':') {
+                    uint32_t ui32Frequency = 0;
+                    char *ptr = &g_cRxBuffer[2];
 
-                // Décodage du format "R,G,B" envoyé par Node.js (ex: "255,0,0")
-                if (sscanf(g_cRxBuffer, "%d,%d,%d", &r, &g, &b) == 3) {
-                    // === SÉCURISATION ET CONNEXION DE L'ACTIONNEUR ===
-                    // On applique directement les intensités reçues à la LED RGB !
+                    // Extraction itérative rapide de l'entier (Fréquence en Hz)
+                    while(*ptr >= '0' && *ptr <= '9') {
+                        ui32Frequency = ui32Frequency * 10 + (*ptr - '0');
+                        ptr++;
+                    }
+
+                    // Application immédiate de l'état audio
+                    if (ui32Frequency == 0) {
+                        Buzzer_Stop();
+                    } else {
+                        Buzzer_PlayNote(ui32Frequency);
+                    }
+                } 
+                // ============================================================
+                // SCÉNARIO 2 : COMMANDE DE LA LED RGB - Format standard "R,G,B"
+                // ============================================================
+                else {
+                    int r = 0, g = 0, b = 0;
+                    char *ptr = g_cRxBuffer;
+
+                    // Extraction de la composante Rouge
+                    while(*ptr >= '0' && *ptr <= '9') { r = r * 10 + (*ptr - '0'); ptr++; }
+                    if(*ptr == ',') ptr++; // Saut de la virgule séparatrice
+                    
+                    // Extraction de la composante Verte
+                    while(*ptr >= '0' && *ptr <= '9') { g = g * 10 + (*ptr - '0'); ptr++; }
+                    if(*ptr == ',') ptr++; // Saut de la virgule séparatrice
+                    
+                    // Extraction de la composante Bleue
+                    while(*ptr >= '0' && *ptr <= '9') { b = b * 10 + (*ptr - '0'); ptr++; }
+
+                    // Application des cycles de travail (PWM) pour la LED RGB
                     LED_RGB_SetIntensity(r, g, b);
                 }
 
-                // Réinitialisation de l'index du buffer pour la prochaine trame
+                // Remise à zéro de l'index pour charger la trame suivante
                 g_ui8BufferIndex = 0;
             }
         } 
-        // Si ce n'est pas une fin de ligne, on accumule dans le buffer s'il y a de la place
+        // Accumulation des caractères entrants tant que le buffer n'est pas plein
         else if (g_ui8BufferIndex < (UART_BUFFER_SIZE - 1)) {
             g_cRxBuffer[g_ui8BufferIndex++] = c;
         }

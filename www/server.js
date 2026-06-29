@@ -98,6 +98,26 @@ app.post('/api/led', (expressReq, expressRes) => {
     });
 });
 
+// --- ROUTE API POUR LE BUZZER (React -> Node.js -> Tiva C) ---
+app.post('/api/buzzer', (req, res) => {
+    const { frequency } = req.body;
+
+    if (frequency === undefined) {
+        return res.status(400).json({ error: 'Fréquence manquante.' });
+    }
+
+    // On formate une trame simple pour la Tiva C, ex: "B:440\n" ou "B:0\n" pour stopper
+    const frame = `B:${frequency}\n`;
+
+    port.write(frame, (err) => {
+        if (err) {
+            console.error("Erreur d'écriture buzzer :", err.message);
+            return res.status(500).json({ error: "Impossible de joindre la carte." });
+        }
+        return res.json({ success: true, playing: frequency });
+    });
+});
+
 // DÉMARRAGE SUR LE SERVEUR UNIQUE
 server.listen(HTTP_PORT, () => {
     console.log(`Serveur Web Fullstack actif sur http://localhost:${HTTP_PORT}`);
