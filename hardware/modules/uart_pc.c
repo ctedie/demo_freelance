@@ -16,7 +16,7 @@ static volatile uint16_t rxIndex = 0;
 static volatile bool commandReceived = false;
 
 // Prototype privé de la routine d'interruption
-static void UART0IntHandler(void);
+void UART0IntHandler(void);
 
 void UART_PC_Init(void) {
     // 1. Activation des périphériques indispensables
@@ -65,7 +65,7 @@ void UART_PC_SendString(const char *str) {
 }
 
 // Routine d'interruption de l'UART0
-static void UART0IntHandler(void) {
+void UART0IntHandler(void) {
     uint32_t ui32Status;
 
     ui32Status = UARTIntStatus(UART0_BASE, true);
