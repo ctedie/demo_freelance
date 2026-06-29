@@ -36,7 +36,8 @@ const port = new SerialPort({
 });
 
 // Découpe les trames entrantes à chaque retour à la ligne (\r\n ou \n)
-const parser = port.pipe(new ReadlineParser({ delimiter: '\r\n' }));
+// Remplace '\r\n' par '\n'
+const parser = port.pipe(new ReadlineParser({ delimiter: '\n' }));
 
 port.open((err) => {
     if (err) {
@@ -48,7 +49,7 @@ port.open((err) => {
 // --- RECEPTION DES DONNÉES (Tiva C -> Node.js -> React) ---
 parser.on('data', (data) => {
     const rawLine = data.toString().trim();
-    
+    console.log("Données reçues du port série :", rawLine); //DEBUG
     // Décodage de la trame du Joystick "J:X,Y,Select,S1,S2"
     if (rawLine.startsWith('J:')) {
         const dataParts = rawLine.replace('J:', '').split(',');
