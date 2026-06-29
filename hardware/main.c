@@ -5,6 +5,7 @@
 #include "modules/led_rgb.h"
 #include "modules/uart_pc.h"
 #include "modules/joystick.h"
+#include "modules/buzzer.h"
 
 int main(void) {
     Joystick_State_t currentJoystickState;
@@ -18,7 +19,8 @@ int main(void) {
     LED_RGB_Init();   
     UART_PC_Init();   
     Joystick_Init();  
-
+    Buzzer_Init();
+    
     while (1) {
         // 1. Lecture de l'état actuel (ADC + Boutons)
         Joystick_ReadState(&currentJoystickState);
