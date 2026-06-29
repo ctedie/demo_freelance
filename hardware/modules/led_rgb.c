@@ -14,7 +14,7 @@ static volatile uint8_t intensityG = 0;
 static volatile uint8_t intensityB = 0;
 
 // Prototype privé du Handler d'interruption
-static void Timer0AIntHandler(void);
+void Timer0AIntHandler(void);
 
 void LED_RGB_Init(void) {
     // 1. Activation des périphériques GPIO et du Timer
@@ -58,7 +58,7 @@ void LED_RGB_SetIntensity(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 // Routine du PWM Logiciel (Exécutée à ~25.6 kHz)
-static void Timer0AIntHandler(void) {
+void Timer0AIntHandler(void) {
     TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
 
     // Gestion du Rouge (PF2)

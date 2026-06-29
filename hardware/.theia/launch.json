@@ -1,16 +1,27 @@
 {
-  // Use IntelliSense to learn about possible attributes.
-  // Hover to view descriptions of existing attributes.
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "materiel",
-      "type": "ccs-debug",
-      "request": "launch",
-      "projectInfo": {
-        "name": "materiel",
-        "resourceId": "/materiel"
-      }
-    }
-  ]
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "materiel",
+            "type": "ccs-debug",
+            "request": "launch",
+            "projectInfo": {
+                "name": "materiel",
+                "resourceId": "/materiel"
+            },
+            "connections": [
+                {
+                    "name": "Stellaris In-Circuit Debug Interface_0",
+                    "cores": [
+                        {
+                            "name": "CORTEX_M4_0",
+                            "debuggerSettings": {
+                                "data": "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\" ?>\n<PropertyValues/>\n"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
 }

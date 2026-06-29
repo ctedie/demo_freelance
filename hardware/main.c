@@ -1,44 +1,42 @@
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdio.h>
+#include <stdio.h> // Requis pour sprintf
 #include "driverlib/sysctl.h"
 #include "modules/led_rgb.h"
 #include "modules/uart_pc.h"
-
-#define MAIN_BUFFER_SIZE 32
-char mainRxBuffer[MAIN_BUFFER_SIZE];
-
-void ProcessCommand(char* cmd) {
-    int r = 0, g = 0, b = 0;
-    
-    // Décodage de la chaîne "R,G,B"
-    if (sscanf(cmd, "%d,%d,%d", &r, &g, &b) == 3) {
-        if (r < 0) r = 0; if (r > 255) r = 255;
-        if (g < 0) g = 0; if (g > 255) g = 255;
-        if (b < 0) b = 0; if (b > 255) b = 255;
-
-        LED_RGB_SetIntensity((uint8_t)r, (uint8_t)g, (uint8_t)b);
-    }
-}
+#include "modules/joystick.h"
 
 int main(void) {
-    // 1. Horloge système à 120 MHz (Unique configuration globale)
+    Joystick_State_t currentJoystickState;
+    char uartBuffer[64];
+
+    // Horloge système à 120 MHz
     SysCtlClockFreqSet((SYSCTL_XTAL_25MHZ | SYSCTL_OSC_MAIN | 
                         SYSCTL_USE_PLL | SYSCTL_CFG_VCO_480), 120000000);
 
-    // 2. Initialisation de tes modules découplés
-    LED_RGB_Init();
-    UART_PC_Init(); // Initialisé en dernier comme dans ton architecture
-
-    // Petit test visuel : lueur blanche au démarrage
-    LED_RGB_SetIntensity(10, 10, 10);
-    UART_PC_SendString("Systeme Pret. En attente de commandes RGB...\n");
+    // Initialisations
+    LED_RGB_Init();   
+    UART_PC_Init();   
+    Joystick_Init();  
 
     while (1) {
-        // Interrogation de l'interface publique de l'UART
-        if (UART_PC_CommandAvailable()) {
-            UART_PC_GetCommand(mainRxBuffer);
-            ProcessCommand(mainRxBuffer);
-        }
+        // 1. Lecture de l'état actuel (ADC + Boutons)
+        Joystick_ReadState(&currentJoystickState);
+
+        // 2. Formatage de la trame attendue par Node.js : "J:X,Y,Select,S1,S2\n"
+        // Les booléens sont convertis en 1 (pressé) ou 0 (relâché)
+        sprintf(uartBuffer, "J:%d,%d,%d,%d,%d\n",
+                currentJoystickState.x,
+                currentJoystickState.y,
+                currentJoystickState.btnSelect ? 1 : 0,
+                currentJoystickState.btnS1 ? 1 : 0,
+                currentJoystickState.btnS2 ? 1 : 0);
+
+        // 3. Envoi de la trame au PC via l'UART
+        UART_PC_SendString(uartBuffer);
+
+        // 4. Temporisation d'environ 50ms pour ne pas saturer le port série (20Hz)
+        // 120 MHz / 3 = 40 000 000 de cycles par seconde. Pour 50ms -> 2 000 000
+        SysCtlDelay(2000000);
     }
 }
