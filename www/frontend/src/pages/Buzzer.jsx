@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 // Dictionnaires de solfège
 const AVAILABLE_NOTES = [
@@ -28,6 +28,23 @@ export default function Buzzer() {
     const [selectedNote, setSelectedNote] = useState(262);
     const [selectedDuration, setSelectedDuration] = useState(8);
 
+    // États pour la sauvegarde
+    const [compositionName, setCompositionName] = useState('');
+    const [savedList, setSavedList] = useState([]);
+
+    // --- Chargement initial des morceaux sauvegardés ---
+    useEffect(() => {
+        fetchSavedCompositions();
+    }, []);
+
+    const fetchSavedCompositions = async () => {
+        try {
+            const res = await fetch('http://localhost:3000/api/compositions');
+            const data = await res.json();
+            setSavedList(data);
+        } catch (err) { console.error("Erreur de chargement de la bibliothèque", err); }
+    };
+
     // --- Fonctions Piano Live ---
     const playNoteLive = async (frequency) => {
         if (frequency === 0) return;
@@ -56,14 +73,10 @@ export default function Buzzer() {
             alert("Maximum de 128 notes atteint.");
             return;
         }
-
         const newNotes = [{ freq: Number(selectedNote), duration: Number(selectedDuration) }];
-        
-        // Ajout automatique d'un micro-silence si ce n'est pas déjà un silence
         if (Number(selectedNote) !== 0) {
             newNotes.push({ freq: 0, duration: 1 });
         }
-
         setComposition([...composition, ...newNotes].slice(0, 128));
     };
 
@@ -90,6 +103,35 @@ export default function Buzzer() {
         } catch (err) { console.error("Erreur envoi séquence:", err); }
     };
 
+    // --- Fonctions de Sauvegarde/Chargement ---
+    const saveComposition = async () => {
+        if (composition.length === 0 || compositionName.trim() === '') {
+            alert("Veuillez donner un nom et ajouter des notes.");
+            return;
+        }
+        try {
+            await fetch('http://localhost:3000/api/compositions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: compositionName, bpm: Number(bpm), notes: composition })
+            });
+            setCompositionName('');
+            fetchSavedCompositions(); // Rafraîchit la liste
+        } catch (err) { console.error("Erreur lors de la sauvegarde", err); }
+    };
+
+    const loadComposition = (e) => {
+        const selectedId = e.target.value;
+        if (!selectedId) return;
+        
+        const selectedComp = savedList.find(c => c.id === Number(selectedId));
+        if (selectedComp) {
+            setBpm(selectedComp.bpm);
+            setComposition(selectedComp.notes);
+        }
+        e.target.value = ""; // Réinitialise le select après chargement
+    };
+
     return (
         <div style={{ padding: '20px', maxWidth: '800px', margin: '0 auto', fontFamily: 'system-ui', color: '#fff', backgroundColor: '#121212', borderRadius: '12px' }}>
             <h2 style={{ textAlign: 'center' }}>🎵 Studio Musical Tiva C</h2>
@@ -106,7 +148,28 @@ export default function Buzzer() {
                 </div>
             </div>
 
-            {/* SECTION 2: ÉDITEUR */}
+            {/* SECTION 2: BIBLIOTHÈQUE & SAUVEGARDE */}
+            <div style={{ backgroundColor: '#1e1e1e', padding: '15px', borderRadius: '8px', marginBottom: '20px', display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '250px' }}>
+                    <h4 style={{ color: '#aaa', marginTop: 0, marginBottom: '10px' }}>Sauvegarder</h4>
+                    <div style={{ display: 'flex', gap: '5px' }}>
+                        <input type="text" placeholder="Nom du morceau..." value={compositionName} onChange={(e) => setCompositionName(e.target.value)} style={{ flex: 1, padding: '8px', background: '#333', color: '#fff', border: 'none', borderRadius: '4px' }} />
+                        <button onClick={saveComposition} style={{ padding: '8px 15px', background: '#28a745', border: 'none', color: '#fff', cursor: 'pointer', borderRadius: '4px' }}>Sauver</button>
+                    </div>
+                </div>
+
+                <div style={{ flex: 1, minWidth: '250px' }}>
+                    <h4 style={{ color: '#aaa', marginTop: 0, marginBottom: '10px' }}>Charger</h4>
+                    <select onChange={loadComposition} style={{ width: '100%', padding: '8px', background: '#333', color: '#fff', border: 'none', borderRadius: '4px' }}>
+                        <option value="">Sélectionner un morceau...</option>
+                        {savedList.map(comp => (
+                            <option key={comp.id} value={comp.id}>{comp.name} ({comp.bpm} BPM)</option>
+                        ))}
+                    </select>
+                </div>
+            </div>
+
+            {/* SECTION 3: ÉDITEUR */}
             <div style={{ backgroundColor: '#1e1e1e', padding: '15px', borderRadius: '8px' }}>
                 <h4 style={{ color: '#aaa', marginTop: 0 }}>Timeline de Partition</h4>
                 
