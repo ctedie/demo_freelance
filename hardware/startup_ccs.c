@@ -45,6 +45,7 @@ static void IntDefaultHandler(void);
 extern void _c_int00(void);
 extern void UART0IntHandler(void);   // Pour le module UART
 extern void Timer0AIntHandler(void); // Pour le module LED RGB (PWM)
+extern void SysTickIntHandler(void); //Pour le systick (la musique)
 
 //*****************************************************************************
 //
@@ -79,7 +80,7 @@ void (* const g_pfnVectors[])(void) =
     IntDefaultHandler,                      // Debug monitor handler
     0,                                      // Reserved
     IntDefaultHandler,                      // The PendSV handler
-    IntDefaultHandler,                      // The SysTick handler
+    SysTickIntHandler,                      // The SysTick handler
     IntDefaultHandler,                      // GPIO Port A
     IntDefaultHandler,                      // GPIO Port B
     IntDefaultHandler,                      // GPIO Port C
