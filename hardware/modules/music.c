@@ -27,7 +27,7 @@ void Music_PlayMelody(const Note_t *melody, uint16_t length, uint16_t bpm) {
     uint32_t msPerBeat = 60000 / bpm; 
     
     // Calcul du temps en ms pour l'unité de base (la double-croche, 1 unité)
-    g_ui32MsPerUnit = msPerBeat / 4; 
+    g_ui32MsPerUnit = msPerBeat / 8; 
 
     // Initialisation de la lecture
     g_pCurrentMelody = melody;

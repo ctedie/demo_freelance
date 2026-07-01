@@ -16,12 +16,13 @@
 #define NOTE_C5 523  // DO supérieur
 
 // --- DURÉES DES NOTES (En Unités de Temps) ---
-// L'unité de base (1) est la double-croche.
-#define DUREE_DOUBLE_CROCHE 1
-#define DUREE_CROCHE        2
-#define DUREE_NOIRE         4
-#define DUREE_BLANCHE       8
-#define DUREE_RONDE         16
+// L'unité de base (1) est maintenant la triple-croche (ou moitié de double-croche).
+#define DUREE_TRIPLE_CROCHE  1
+#define DUREE_DOUBLE_CROCHE  2
+#define DUREE_CROCHE         4
+#define DUREE_NOIRE          8
+#define DUREE_BLANCHE        16
+#define DUREE_RONDE          32
 
 // --- STRUCTURE D'UNE NOTE ---
 typedef struct {
