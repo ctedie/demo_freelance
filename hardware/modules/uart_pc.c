@@ -15,7 +15,7 @@
 #include "music.h"
 
 // Taille étendue à 128 octets pour recevoir confortablement les trames de partitions
-#define UART_BUFFER_SIZE 128
+#define UART_BUFFER_SIZE 1024
 
 static char g_cRxBuffer[UART_BUFFER_SIZE];
 static uint8_t g_ui8BufferIndex = 0;
@@ -83,8 +83,8 @@ void UART0IntHandler(void) {
                     if(*ptr == ',') ptr++;
 
                     // Tableau statique local pour stocker la partition (Max 24 notes)
-                    static Note_t s_IncomingMelody[24];
-                    if(ui8NoteCount > 24) ui8NoteCount = 24;
+                    static Note_t s_IncomingMelody[128];
+                    if(ui8NoteCount > 128) ui8NoteCount = 128;
 
                     // Parsing itératif des couples (Fréquence, Durée)
                     uint8_t index;
