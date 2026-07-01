@@ -1,136 +1,164 @@
 #include "uart_pc.h"
 #include <stdint.h>
 #include <stdbool.h>
-#include <string.h>   
 #include "inc/hw_memmap.h"
 #include "inc/hw_ints.h"
 #include "driverlib/sysctl.h"
 #include "driverlib/gpio.h"
 #include "driverlib/uart.h"
-#include "driverlib/interrupt.h"
 #include "driverlib/pin_map.h"
+#include "driverlib/interrupt.h"
 
-// Inclusion des modules pour piloter les actionneurs
-#include "led_rgb.h" 
+// Inclusion des autres modules pour l'actionnement
+#include "led_rgb.h"
 #include "buzzer.h"
+#include "music.h"
 
-// --- CONFIGURATION DU BUFFER SÉRIE SÉCURISÉ ---
-#define UART_BUFFER_SIZE 32
+// Taille étendue à 128 octets pour recevoir confortablement les trames de partitions
+#define UART_BUFFER_SIZE 128
 
-// Alignement sur 4 octets (32 bits) pour garantir un accès mémoire optimal par le CPU
-#pragma DATA_ALIGN(g_cRxBuffer, 4)
 static char g_cRxBuffer[UART_BUFFER_SIZE];
 static uint8_t g_ui8BufferIndex = 0;
 
 /**
- * @brief Initialisation de l'UART0 pour la communication avec le PC (115200 bauds)
+ * @brief Initialisation de l'UART0 (115200 bauds, 8-N-1) avec interruptions
  */
 void UART_PC_Init(void) {
-    // 1. Activation des horloges pour l'UART0 et le Port A
+    // 1. Activation des périphériques UART0 et GPIO Port A
     SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
     SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
 
     while(!SysCtlPeripheralReady(SYSCTL_PERIPH_UART0) || 
           !SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOA)) {}
 
-    SysCtlDelay(10); // Petit délai de stabilisation mécanique du bus
-
     // 2. Configuration des broches PA0 (RX) et PA1 (TX)
     GPIOPinConfigure(GPIO_PA0_U0RX);
     GPIOPinConfigure(GPIO_PA1_U0TX);
     GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
 
-    // 3. Liaison série à 115200 bauds basée sur l'horloge système de 120 MHz
+    // 3. Configuration du protocole (115200, 8-N-1) sur l'horloge système à 120 MHz
     UARTConfigSetExpClk(UART0_BASE, 120000000, 115200,
                         (UART_CONFIG_WLEN_8 | UART_CONFIG_STOP_ONE |
                          UART_CONFIG_PAR_NONE));
 
-    // 4. Configuration et activation des interruptions matérielles
+    // 4. Configuration et activation des interruptions (Rx et Rx Timeout)
     UARTIntEnable(UART0_BASE, UART_INT_RX | UART_INT_RT);
     IntEnable(INT_UART0);
-
-    // Initialisation propre de la mémoire du tampon
-    memset(g_cRxBuffer, 0, UART_BUFFER_SIZE);
-    g_ui8BufferIndex = 0;
 }
 
 /**
- * @brief Envoi d'une chaîne de caractères textuelle vers le PC
- */
-void UART_PC_SendString(const char *str) {
-    while(*str) {
-        UARTCharPut(UART0_BASE, *str++);
-    }
-}
-
-/**
- * @brief Routine d'interruption (ISR) de l'UART0 - Gestionnaire de paquets
+ * @brief Routine d'interruption (ISR) de l'UART0 - Parseur de commandes non-bloquant
  */
 void UART0IntHandler(void) {
     uint32_t ui32Status;
 
-    // Récupération et acquittement des drapeaux d'interruption UART
+    // Récupération et acquittement du statut de l'interruption
     ui32Status = UARTIntStatus(UART0_BASE, true);
     UARTIntClear(UART0_BASE, ui32Status);
 
-    // Vidage de la FIFO matérielle de réception
+    // Lecture de tous les caractères disponibles dans le FIFO matériel
     while(UARTCharsAvail(UART0_BASE)) {
         char c = (char)UARTCharGetNonBlocking(UART0_BASE);
 
-        // Détection de fin de ligne (Validation de la trame reçue)
+        // Si on détecte une fin de trame
         if (c == '\n' || c == '\r') {
             if (g_ui8BufferIndex > 0) {
-                g_cRxBuffer[g_ui8BufferIndex] = '\0'; // Fermeture de la string C
+                // Ajout du caractère de fin de chaîne de caractères C
+                g_cRxBuffer[g_ui8BufferIndex] = '\0';
 
                 // ============================================================
-                // SCÉNARIO 1 : COMMANDE DU BUZZER PIANO - Format "B:Frequence"
+                // SCÉNARIO 1 : RECEPTION D'UNE PARTITION ("M:BPM,Count,f1,d1...")
                 // ============================================================
-                if (g_cRxBuffer[0] == 'B' && g_cRxBuffer[1] == ':') {
-                    uint32_t ui32Frequency = 0;
+                if (g_cRxBuffer[0] == 'M' && g_cRxBuffer[1] == ':') {
                     char *ptr = &g_cRxBuffer[2];
+                    
+                    // Extraction du BPM
+                    uint16_t ui16Bpm = 0;
+                    while(*ptr >= '0' && *ptr <= '9') { ui16Bpm = ui16Bpm * 10 + (*ptr - '0'); ptr++; }
+                    if(*ptr == ',') ptr++;
 
-                    // Extraction itérative rapide de l'entier (Fréquence en Hz)
-                    while(*ptr >= '0' && *ptr <= '9') {
-                        ui32Frequency = ui32Frequency * 10 + (*ptr - '0');
-                        ptr++;
+                    // Extraction du nombre de notes
+                    uint8_t ui8NoteCount = 0;
+                    while(*ptr >= '0' && *ptr <= '9') { ui8NoteCount = ui8NoteCount * 10 + (*ptr - '0'); ptr++; }
+                    if(*ptr == ',') ptr++;
+
+                    // Tableau statique local pour stocker la partition (Max 24 notes)
+                    static Note_t s_IncomingMelody[24];
+                    if(ui8NoteCount > 24) ui8NoteCount = 24;
+
+                    // Parsing itératif des couples (Fréquence, Durée)
+                    uint8_t index;
+                    for(index = 0; index < ui8NoteCount; index++)
+                    {
+                        // Extraction Fréquence
+                        uint32_t freq = 0;
+                        while(*ptr >= '0' && *ptr <= '9') { freq = freq * 10 + (*ptr - '0'); ptr++; }
+                        if(*ptr == ',') ptr++;
+
+                        // Extraction Durée
+                        uint8_t dur = 0;
+                        while(*ptr >= '0' && *ptr <= '9') { dur = dur * 10 + (*ptr - '0'); ptr++; }
+                        if(*ptr == ',') ptr++;
+
+                        s_IncomingMelody[index].frequency = freq;
+                        s_IncomingMelody[index].duration = dur;
                     }
 
-                    // Application immédiate de l'état audio
+                    // Envoi immédiat au séquenceur matériel autonome
+                    Music_PlayMelody(s_IncomingMelody, ui8NoteCount, ui16Bpm);
+                }
+                
+                // ============================================================
+                // SCÉNARIO 2 : COMMANDE DU BUZZER EN DIRECT ("B:Frequence")
+                // ============================================================
+                else if (g_cRxBuffer[0] == 'B' && g_cRxBuffer[1] == ':') {
+                    uint32_t ui32Frequency = 0;
+                    char *ptr = &g_cRxBuffer[2];
+                    while(*ptr >= '0' && *ptr <= '9') { ui32Frequency = ui32Frequency * 10 + (*ptr - '0'); ptr++; }
+                    
                     if (ui32Frequency == 0) {
                         Buzzer_Stop();
                     } else {
+                        // Si le séquenceur jouait une musique, on la coupe pour donner la priorité au live
+                        Music_Stop(); 
                         Buzzer_PlayNote(ui32Frequency);
                     }
                 } 
+                
                 // ============================================================
-                // SCÉNARIO 2 : COMMANDE DE LA LED RGB - Format standard "R,G,B"
+                // SCÉNARIO 3 : COMMANDE DE LA LED RGB ("R,G,B")
                 // ============================================================
                 else {
                     int r = 0, g = 0, b = 0;
                     char *ptr = g_cRxBuffer;
-
-                    // Extraction de la composante Rouge
-                    while(*ptr >= '0' && *ptr <= '9') { r = r * 10 + (*ptr - '0'); ptr++; }
-                    if(*ptr == ',') ptr++; // Saut de la virgule séparatrice
                     
-                    // Extraction de la composante Verte
-                    while(*ptr >= '0' && *ptr <= '9') { g = g * 10 + (*ptr - '0'); ptr++; }
-                    if(*ptr == ',') ptr++; // Saut de la virgule séparatrice
-                    
-                    // Extraction de la composante Bleue
+                    while(*ptr >= '0' && *ptr <= '9') { r = r * 10 + (*ptr - '0'); ptr++; } if(*ptr == ',') ptr++;
+                    while(*ptr >= '0' && *ptr <= '9') { g = g * 10 + (*ptr - '0'); ptr++; } if(*ptr == ',') ptr++;
                     while(*ptr >= '0' && *ptr <= '9') { b = b * 10 + (*ptr - '0'); ptr++; }
-
-                    // Application des cycles de travail (PWM) pour la LED RGB
+                    
                     LED_RGB_SetIntensity(r, g, b);
                 }
 
-                // Remise à zéro de l'index pour charger la trame suivante
+                // Réinitialisation de l'index pour la prochaine trame
                 g_ui8BufferIndex = 0;
             }
         } 
-        // Accumulation des caractères entrants tant que le buffer n'est pas plein
+        // Accumulation dans le tampon tant qu'il reste de la place
         else if (g_ui8BufferIndex < (UART_BUFFER_SIZE - 1)) {
             g_cRxBuffer[g_ui8BufferIndex++] = c;
         }
+    }
+}
+
+/**
+ * @brief Envoie une chaîne de caractères (string) au PC via UART0
+ * @param str Pointeur vers la chaîne de caractères à envoyer
+ */
+void UART_PC_SendString(const char *str) {
+    // Tant qu'on n'est pas arrivé au caractère de fin de chaîne '\0'
+    while(*str != '\0') {
+        // Envoi du caractère actuel (bloquant pour s'assurer que le FIFO ne déborde pas)
+        UARTCharPut(UART0_BASE, *str);
+        str++; // On passe au caractère suivant
     }
 }

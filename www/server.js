@@ -118,6 +118,34 @@ app.post('/api/buzzer', (req, res) => {
     });
 });
 
+// --- ROUTE API POUR LE SÉQUENCEUR DE MÉLODIES ---
+app.post('/api/sequence', (req, res) => {
+    const { bpm, notes } = req.body; // notes est un tableau: [{freq: 262, duration: 8}, ...]
+
+    if (!bpm || !notes || !Array.isArray(notes)) {
+        return res.status(400).json({ error: 'Données de partition invalides.' });
+    }
+
+    // Reconstruction de la trame au format M:BPM,Count,f1,d1,f2,d2...
+    let frame = `M:${bpm},${notes.length}`;
+    
+    notes.forEach(note => {
+        frame += `,${note.freq},${note.duration}`;
+    });
+    
+    frame += '\n'; // Fin de trame pour le parser C
+
+    // Envoi sur le port série
+    port.write(frame, (err) => {
+        if (err) {
+            console.error("Erreur d'envoi de la mélodie :", err.message);
+            return res.status(500).json({ error: "Échec de l'envoi série." });
+        }
+        console.log(`Mélodie envoyée (${notes.length} notes) : ${frame.trim()}`);
+        return res.json({ success: true });
+    });
+});
+
 // DÉMARRAGE SUR LE SERVEUR UNIQUE
 server.listen(HTTP_PORT, () => {
     console.log(`Serveur Web Fullstack actif sur http://localhost:${HTTP_PORT}`);
